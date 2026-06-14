@@ -175,7 +175,7 @@ export default function App() {
     }, 600);
   }, [criteria]);
 
-  useEffect(() => { runScan(); }, []);
+  useEffect(() => { runScan(); }, [runScan]);
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(runScan, 30000);
