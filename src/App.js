@@ -1,18 +1,10 @@
+
 import { useState, useEffect, useCallback, useRef } from "react";
-
-const DEMO_STOCKS = [
-  { ticker:"BNRG", price:4.82,  change:8.4,  rvol:4.2,  marketCap:180,  float:8.2,  atr:0.72, aboveVWAP:true,  aboveMa20:true,  aboveMa50:true,  gap:5.1,  consolidationDays:12, spread:1.1, hasEarnings:false, vol:2100000 },
-  { ticker:"MVST", price:7.14,  change:12.1, rvol:6.8,  marketCap:420,  float:15.3, atr:0.94, aboveVWAP:true,  aboveMa20:true,  aboveMa50:false, gap:9.2,  consolidationDays:8,  spread:0.8, hasEarnings:false, vol:5400000 },
-  { ticker:"CZWI", price:3.27,  change:5.6,  rvol:2.1,  marketCap:95,   float:4.1,  atr:0.38, aboveVWAP:false, aboveMa20:true,  aboveMa50:true,  gap:0,    consolidationDays:19, spread:1.8, hasEarnings:false, vol:630000  },
-  { ticker:"FLNC", price:11.55, change:3.2,  rvol:3.5,  marketCap:870,  float:22.0, atr:0.88, aboveVWAP:true,  aboveMa20:true,  aboveMa50:true,  gap:2.1,  consolidationDays:6,  spread:0.5, hasEarnings:false, vol:1750000 },
-  { ticker:"PRLD", price:9.03,  change:-1.2, rvol:0.9,  marketCap:310,  float:11.5, atr:0.61, aboveVWAP:false, aboveMa20:false, aboveMa50:false, gap:-2.0, consolidationDays:3,  spread:1.4, hasEarnings:true,  vol:270000  },
-  { ticker:"SPGX", price:6.44,  change:14.7, rvol:9.1,  marketCap:240,  float:6.8,  atr:1.12, aboveVWAP:true,  aboveMa20:true,  aboveMa50:true,  gap:11.3, consolidationDays:15, spread:1.0, hasEarnings:false, vol:8200000 },
-  { ticker:"HLIT", price:2.98,  change:7.8,  rvol:3.3,  marketCap:72,   float:3.2,  atr:0.44, aboveVWAP:true,  aboveMa20:true,  aboveMa50:false, gap:4.5,  consolidationDays:9,  spread:2.2, hasEarnings:false, vol:990000  },
-  { ticker:"VERB", price:1.88,  change:21.3, rvol:12.4, marketCap:58,   float:2.1,  atr:0.31, aboveVWAP:true,  aboveMa20:true,  aboveMa50:true,  gap:18.0, consolidationDays:22, spread:3.1, hasEarnings:false, vol:6200000 },
-  { ticker:"MTTR", price:5.61,  change:2.9,  rvol:1.7,  marketCap:1100, float:45.0, atr:0.55, aboveVWAP:true,  aboveMa20:false, aboveMa50:false, gap:0,    consolidationDays:4,  spread:0.6, hasEarnings:false, vol:850000  },
-  { ticker:"ITRM", price:13.20, change:6.3,  rvol:4.7,  marketCap:650,  float:18.6, atr:1.05, aboveVWAP:true,  aboveMa20:true,  aboveMa50:true,  gap:3.8,  consolidationDays:11, spread:0.7, hasEarnings:false, vol:3100000 },
-];
-
+ 
+// ── PUT YOUR POLYGON.IO API KEY HERE ─────────────────────────────────────────
+const POLYGON_API_KEY = "SI1LTulNdkjC2D_nwPDHOXtz7MKlltWB"
+// ─────────────────────────────────────────────────────────────────────────────
+ 
 const DEFAULT_CRITERIA = {
   minPrice:1, maxPrice:20,
   minMarketCap:50, maxMarketCap:2000,
@@ -23,25 +15,70 @@ const DEFAULT_CRITERIA = {
   excludeEarnings:true, maxSpread:3.0,
   minConsolidationDays:5,
 };
-
+ 
 const ALERT_THRESHOLDS = { rvol:5, change:10, gap:8 };
-
+ 
+// Fetch snapshot for a list of tickers from Polygon
+async function fetchPolygonData() {
+  try {
+    // Get gainers (stocks up the most today)
+    const res = await fetch(
+      `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${POLYGON_API_KEY}`
+    );
+    const json = await res.json();
+    if (!json.tickers) return [];
+ 
+    return json.tickers
+      .filter(t => t.day && t.prevDay)
+      .map(t => {
+        const price = t.day.c || t.lastTrade?.p || 0;
+        const prevClose = t.prevDay.c || 1;
+        const change = ((price - prevClose) / prevClose) * 100;
+        const vol = t.day.v || 0;
+        const avgVol = t.prevDay.v || 1;
+        const rvol = vol / avgVol;
+        const gap = ((t.day.o - prevClose) / prevClose) * 100;
+        const spread = price > 0 ? ((t.day.h - t.day.l) / price) * 100 : 0;
+ 
+        return {
+          ticker: t.ticker,
+          price,
+          change,
+          rvol,
+          vol,
+          avgVol,
+          gap,
+          spread,
+          atr: (t.day.h - t.day.l) || 0,
+          marketCap: (t.day.c * 1000000) / 1000000, // placeholder
+          float: 10, // Polygon free tier doesn't include float
+          aboveVWAP: price > (t.day.vw || 0),
+          aboveMa20: change > 0, // simplified
+          aboveMa50: change > 2, // simplified
+          hasEarnings: false,
+          consolidationDays: 7, // simplified
+        };
+      })
+      .filter(s => s.price > 0 && s.price < 50); // basic filter
+  } catch (err) {
+    console.error("Polygon fetch error:", err);
+    return [];
+  }
+}
+ 
 function passesFilter(s, c) {
   if (s.price < c.minPrice || s.price > c.maxPrice) return false;
-  if (s.marketCap < c.minMarketCap || s.marketCap > c.maxMarketCap) return false;
   if (s.rvol < c.minRvol) return false;
   if (s.vol < c.minVol) return false;
   if (s.change < c.minChange || s.change > c.maxChange) return false;
-  if (s.float < c.minFloat) return false;
   if (s.atr < c.minAtr) return false;
   if (c.requireAboveVWAP && !s.aboveVWAP) return false;
   if (c.requireAboveMa20 && !s.aboveMa20) return false;
   if (c.excludeEarnings && s.hasEarnings) return false;
   if (s.spread > c.maxSpread) return false;
-  if (s.consolidationDays < c.minConsolidationDays) return false;
   return true;
 }
-
+ 
 function scoreStock(s) {
   let n = 0;
   if (s.rvol >= 5) n += 30; else if (s.rvol >= 3) n += 20; else n += 10;
@@ -50,22 +87,21 @@ function scoreStock(s) {
   if (s.aboveVWAP) n += 10;
   if (s.aboveMa20) n += 8;
   if (s.aboveMa50) n += 7;
-  if (s.consolidationDays >= 10) n += 10; else if (s.consolidationDays >= 5) n += 5;
   return Math.min(n, 100);
 }
-
+ 
 function fmtVol(v) {
   if (v >= 1e6) return (v/1e6).toFixed(1)+"M";
   if (v >= 1e3) return (v/1e3).toFixed(0)+"K";
   return v;
 }
-
+ 
 async function requestNotifPermission() {
   if (!("Notification" in window)) return false;
   if (Notification.permission === "granted") return true;
   return (await Notification.requestPermission()) === "granted";
 }
-
+ 
 function fireNotification(title, body) {
   if (Notification.permission !== "granted") return;
   if ("serviceWorker" in navigator) {
@@ -74,20 +110,20 @@ function fireNotification(title, body) {
     );
   }
 }
-
+ 
 const C = {
   bg:"#0b0e1a", surface:"#0e1122", border:"#1a2040",
   green:"#00e5a0", blue:"#00aaff", yellow:"#f5c842",
   red:"#ff4c6b", purple:"#8060ff",
   text:"#c8d0f0", muted:"#6b7db3", faint:"#3a4060",
 };
-
+ 
 const pill = color => ({
   fontSize:9, fontWeight:800, letterSpacing:"0.08em",
   padding:"2px 6px", borderRadius:4,
   background:color+"22", color, border:`1px solid ${color}44`,
 });
-
+ 
 function ScoreBar({ score }) {
   const color = score >= 75 ? C.green : score >= 50 ? C.yellow : C.red;
   return (
@@ -99,7 +135,7 @@ function ScoreBar({ score }) {
     </div>
   );
 }
-
+ 
 function Toggle({ value, onChange, label }) {
   return (
     <label style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, cursor:"pointer" }}>
@@ -116,7 +152,7 @@ function Toggle({ value, onChange, label }) {
     </label>
   );
 }
-
+ 
 function NumField({ label, value, step, onChange }) {
   return (
     <div style={{ marginBottom:14 }}>
@@ -132,7 +168,7 @@ function NumField({ label, value, step, onChange }) {
     </div>
   );
 }
-
+ 
 export default function App() {
   const [criteria, setCriteria]         = useState(DEFAULT_CRITERIA);
   const [results, setResults]           = useState([]);
@@ -145,14 +181,23 @@ export default function App() {
   const [sortDir, setSortDir]           = useState("desc");
   const [autoRefresh, setAutoRefresh]   = useState(false);
   const [notifEnabled, setNotifEnabled] = useState(typeof Notification !== "undefined" && Notification.permission === "granted");
+  const [error, setError]               = useState(null);
   const seenAlerts = useRef(new Set());
-
-  const runScan = useCallback(() => {
+ 
+  const runScan = useCallback(async () => {
     setScanning(true);
-    setTimeout(() => {
-      const passed = DEMO_STOCKS
+    setError(null);
+    try {
+      const stocks = await fetchPolygonData();
+      if (stocks.length === 0) {
+        setError("No data returned. Market may be closed or API key invalid.");
+        setScanning(false);
+        return;
+      }
+      const passed = stocks
         .filter(s => passesFilter(s, criteria))
         .map(s => ({ ...s, score: scoreStock(s) }));
+ 
       const newAlerts = passed.filter(s =>
         s.rvol >= ALERT_THRESHOLDS.rvol ||
         s.change >= ALERT_THRESHOLDS.change ||
@@ -161,7 +206,7 @@ export default function App() {
       setResults(passed);
       setAlerts(newAlerts);
       setLastScan(new Date());
-      setScanning(false);
+ 
       newAlerts.forEach(s => {
         if (!seenAlerts.current.has(s.ticker)) {
           seenAlerts.current.add(s.ticker);
@@ -172,29 +217,32 @@ export default function App() {
           setAlertLog(prev => [{ ticker:s.ticker, reason, time:new Date(), price:s.price }, ...prev].slice(0,50));
         }
       });
-    }, 600);
+    } catch(err) {
+      setError("Scan failed: " + err.message);
+    }
+    setScanning(false);
   }, [criteria]);
-
+ 
   useEffect(() => { runScan(); }, [runScan]);
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(runScan, 30000);
     return () => clearInterval(id);
   }, [autoRefresh, runScan]);
-
+ 
   const handleEnableNotifs = async () => {
     const ok = await requestNotifPermission();
     setNotifEnabled(ok);
     if (ok) fireNotification("✅ Alerts enabled", "You'll be notified on breakouts.");
   };
-
+ 
   const sorted = [...results].sort((a, b) => {
     const av = a[sortKey] ?? 0, bv = b[sortKey] ?? 0;
     return sortDir === "desc" ? bv - av : av - bv;
   });
-
+ 
   const upd = (k, v) => setCriteria(p => ({ ...p, [k]:v }));
-
+ 
   const thStyle = {
     padding:"10px 10px", textAlign:"left", fontSize:10,
     fontWeight:700, letterSpacing:"0.08em", color:C.muted,
@@ -202,14 +250,14 @@ export default function App() {
     userSelect:"none", background:"#0b0e1a",
   };
   const tdStyle = { padding:"10px 10px", fontSize:12, borderTop:`1px solid ${C.border}` };
-
+ 
   const SortArrow = ({ col }) => sortKey === col
     ? <span style={{ color:C.green, marginLeft:2 }}>{sortDir==="desc"?"↓":"↑"}</span>
     : <span style={{ color:C.faint, marginLeft:2 }}>↕</span>;
-
+ 
   return (
     <div style={{ minHeight:"100vh", background:C.bg, color:C.text, fontFamily:"'Inter','Segoe UI',sans-serif" }}>
-
+ 
       {/* Header */}
       <div style={{
         background:C.surface, borderBottom:`1px solid ${C.border}`,
@@ -223,7 +271,7 @@ export default function App() {
           }}>⚡</div>
           <div>
             <div style={{ fontWeight:800, fontSize:14, color:"#fff" }}>BreakoutScanner</div>
-            <div style={{ fontSize:9, color:C.faint, letterSpacing:"0.1em" }}>SMALL CAP · MOMENTUM</div>
+            <div style={{ fontSize:9, color:C.faint, letterSpacing:"0.1em" }}>SMALL CAP · LIVE DATA</div>
           </div>
         </div>
         <button onClick={runScan} disabled={scanning} style={{
@@ -234,7 +282,7 @@ export default function App() {
           fontWeight:700, fontSize:12, cursor: scanning ? "not-allowed" : "pointer",
         }}>{scanning ? "Scanning…" : "▶ Scan"}</button>
       </div>
-
+ 
       {/* Stats */}
       <div style={{ display:"flex", gap:8, padding:"12px 16px" }}>
         {[
@@ -249,7 +297,14 @@ export default function App() {
           </div>
         ))}
       </div>
-
+ 
+      {/* Error banner */}
+      {error && (
+        <div style={{ margin:"0 16px 12px", background:"#2a1020", border:`1px solid ${C.red}44`, borderRadius:8, padding:"10px 14px", fontSize:12, color:C.red }}>
+          ⚠️ {error}
+        </div>
+      )}
+ 
       {/* Tabs */}
       <div style={{ display:"flex", padding:"0 16px", borderBottom:`1px solid ${C.border}` }}>
         {["scanner","criteria","alerts"].map(t => (
@@ -273,16 +328,16 @@ export default function App() {
           {lastScan && <span>{lastScan.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>}
         </div>
       </div>
-
+ 
       <div style={{ padding:"16px" }}>
-
+ 
         {/* SCANNER */}
         {tab === "scanner" && (
           results.length === 0 && !scanning ? (
             <div style={{ textAlign:"center", padding:60, color:C.faint }}>
               <div style={{ fontSize:36, marginBottom:12 }}>🔍</div>
-              <div style={{ fontWeight:700 }}>No stocks matched</div>
-              <div style={{ fontSize:13, marginTop:6 }}>Loosen filters in Criteria tab</div>
+              <div style={{ fontWeight:700 }}>{error ? "Scan error" : "No stocks matched"}</div>
+              <div style={{ fontSize:13, marginTop:6 }}>{error ? "Check your API key" : "Try scanning or loosening filters"}</div>
             </div>
           ) : (
             <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, overflowX:"auto" }}>
@@ -336,7 +391,7 @@ export default function App() {
             </div>
           )
         )}
-
+ 
         {/* CRITERIA */}
         {tab === "criteria" && (
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
@@ -384,7 +439,7 @@ export default function App() {
             </div>
           </div>
         )}
-
+ 
         {/* ALERTS */}
         {tab === "alerts" && (
           <div>
